@@ -2,6 +2,8 @@
 
 *Mac stats at a glance*
 
+[Website](https://byfkc.com/little-moon/) · [Download](https://github.com/felixfu824/little-moon-stat/releases/latest)
+
 ![Little Moon: moons in the menu bar, the open popover and the desktop panel](docs/readme/hero.png)
 
 Know when your Mac is working hard: CPU and GPU temperature and RAM use at a glance, for under 1% of one CPU core.
