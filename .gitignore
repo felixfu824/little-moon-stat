@@ -1,0 +1,39 @@
+.build/
+build/
+.swiftpm/
+*.xcodeproj
+DerivedData/
+.DS_Store
+/tmp/
+excalidraw.log
+
+# --- Internal only: never published (lead, 2026-11-05). Files stay on disk, untracked. ---
+# Agent rules and orchestration state
+AGENTS.md
+CLAUDE.md
+.claude/
+.orca/
+docs/STATUS.md
+docs/PLAN.md
+docs/next-phase/
+docs/specs/
+# Reviews, acceptance evidence, spike and wave reports (machine logs, process lists, captures)
+docs/review/
+docs/acceptance/
+docs/spikes/
+docs/wave*/
+docs/RELEASE-*.md
+# Design canvases and research notes / raw probe data
+docs/design/
+docs/research/*
+!docs/research/probe.c
+!docs/research/gpuload.swift
+# Local artifacts
+*.log
+*.jsonl
+*.p8
+*.dmg
+*.zip
+
+# Internal design memo (README visual options)
+docs/readme/visual-options.md
