@@ -5,7 +5,7 @@ the working title so settings and tour state carry over) and the pinned identity
 **Developer ID Application: Kuang Cheng Fu (8Z5RQYC6M5)**.
 
 Never put signing keys, notary passwords, API keys (`*.p8`), machine logs or screenshots of a real desktop in Git.
-`NOTARY_PROFILE` is the name of a `notarytool` keychain profile (`littlemoon-notary` on Felix's MacBook Pro), never a
+`NOTARY_PROFILE` is the name of a `notarytool` keychain profile (`littlemoon-notary` on the release Mac), never a
 password. Create it once, by hand, in a real terminal:
 
 ```sh
@@ -17,7 +17,10 @@ The app-specific password comes from account.apple.com → Sign-In and Security 
 ## 1. Prepare the exact source
 
 1. Start from a clean `main`: `git status --short` must be empty.
-2. Bump `Resources/Info.plist`: `CFBundleShortVersionString` (0.x, no 1.0 until Felix calls it finished) and
+   The repo is public: internal notes stay untracked (see `.gitignore`). Before tagging, `git ls-files` must list
+   only code (incl. `Spikes/`, `Tools/` and the two sources in `docs/research/`), scripts, tests, README assets,
+   `LICENSE`, `docs/RELEASING.md` and `docs/release-notes/`.
+2. Bump `Resources/Info.plist`: `CFBundleShortVersionString` (0.x until the maintainer calls it 1.0) and
    `CFBundleVersion` (+1 every release). Commit.
 3. Run the checks (unsandboxed; IOKit, `ps` and the app do not work inside a sandbox):
 
