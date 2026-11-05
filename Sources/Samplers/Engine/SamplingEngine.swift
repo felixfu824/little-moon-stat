@@ -127,6 +127,9 @@ final class SamplingState: @unchecked Sendable {
     private var stoppedAt: Double?
     private let uptime: () -> Double
     private var lastStatuses: [String] = []
+    /// When CPU tick counters were last re-baselined. A delta over a much shorter window
+    /// is too coarse to show, so the next fast tick skips CPU % if it lands within 0.5 s.
+    private var cpuBaselineAt: Double?
     init(cpuSource: CPUUsageSampling? = nil, samplerSet: SamplerSet? = nil, faults: FaultConfiguration = FaultConfiguration(),
          uptime: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
         self.uptime = uptime
@@ -177,7 +180,7 @@ final class SamplingState: @unchecked Sendable {
                 // Establish new deltas without replacing the aggregator's held rows/status.
                 // Recovery's immediate fast tick must publish the first wakeTransient
                 // baseline result; short resumes wait for the existing next delta.
-                if !resetSMC && !longPause { _ = readings.sampleCPUStatus() }
+                if !resetSMC && !longPause { _ = readings.sampleCPUStatus(); cpuBaselineAt = uptime() }
                 if aggregator?.snapshot.disk == nil { diskTick() }
                 aggregator?.restartProcessSmoothing()
             }
@@ -204,6 +207,7 @@ final class SamplingState: @unchecked Sendable {
             samplers.resetProcesses()
             aggregator?.restartProcessSmoothing()
             _ = readings.sampleCPUStatus()
+            cpuBaselineAt = uptime()
             if aggregator?.snapshot.disk == nil { diskTick() }
             startDetailTimers(on: queue, processInterval: SamplingCadence.processInterval(logicalCoreCount: ProcessInfo.processInfo.processorCount))
             startWarmUp(on: queue)
@@ -253,7 +257,9 @@ final class SamplingState: @unchecked Sendable {
         return timer
     }
     func fastTick() {
-        let usage = details ? measured("cpu") { readings.sampleCPUStatus() } : nil
+        let freshBaseline = cpuBaselineAt.map { uptime() - $0 < SamplingCadence.minimumCPUWindow } ?? false
+        let usage = details && !freshBaseline ? measured("cpu") { readings.sampleCPUStatus() } : nil
+        if details && !freshBaseline { cpuBaselineAt = nil }
         let temps = measured("smc") { readings.sampleTemperaturesStatus() }
         let gpuUsage = details ? measured("gpu") { readings.sampleGPUStatus() } : nil
         let needsMemory=details || presentationOptions.menuBarMoons.contains(.ram)
@@ -328,6 +334,7 @@ enum SamplingCadence {
     static func discoveryEvery(processInterval: Double) -> Int { max(1, Int(25 / processInterval)) }
     static let warmUpFast = 1.0
     static let warmUpProcess = 2.0
+    static let minimumCPUWindow = 0.5
 }
 
 /// Publication follows visible precision, never raw sensor noise. Explicit/system

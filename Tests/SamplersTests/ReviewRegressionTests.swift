@@ -173,7 +173,8 @@ func testHostSendReferencesRemainStableAcrossTwoHundredSamples() {
 
 @Test func closedMenuBarSamplesNoPanelMetricsAndDetailsRecover() {
     let cpu = FailedCPU()
-    let state = SamplingState(cpuSource: cpu)
+    nonisolated(unsafe) var now = 100.0
+    let state = SamplingState(cpuSource: cpu, uptime: { now })
     let queue = DispatchQueue(label: "test.menubar.gating")
     queue.sync {
         var snapshots: [Snapshot] = []
@@ -184,6 +185,7 @@ func testHostSendReferencesRemainStableAcrossTwoHundredSamples() {
         #expect(snapshots.allSatisfy { $0.cpuPercent == nil && $0.gpuPercent == nil && $0.memory == nil && $0.disk == nil && $0.thermal == nil && $0.topProcesses.isEmpty })
         snapshots.removeAll()
         state.start(on: queue, resetSMC: false, details: true) { snapshots.append($0) }
+        now += 2 // The next fast tick is one period after the new baseline.
         state.fastTick() // Details resume on the existing fast cadence, retaining held values until then.
         state.stop()
         #expect(cpu.calls == 2)

@@ -444,3 +444,22 @@ func malformedMappedPayloadFallsBackAndRetainsFault(value: Double) {
     #expect(status?.fault == .wakeTransient)
     #expect(fake.reads["cpu"] == 2)
 }
+
+@Test func cpuDeltaShorterThanHalfASecondAfterARebaselineIsSkipped() {
+    var now = 100.0
+    let fake = FakeSet(), queue = DispatchQueue(label: "wp41.window")
+    queue.suspend()
+    let state = SamplingState(samplerSet: fake.set, uptime: { now })
+    defer { state.stop(); queue.resume() }
+    var latest: Snapshot?
+    state.start(on: queue, resetSMC: false, details: false, publish: { latest = $0 })
+    state.setDetails(true, on: queue)
+    let calls = fake.reads["cpu", default: 0]
+    now += 0.02
+    state.fastTick()
+    #expect(fake.reads["cpu", default: 0] == calls)
+    now += 1
+    state.fastTick()
+    #expect(fake.reads["cpu", default: 0] == calls + 1)
+    _ = latest
+}
