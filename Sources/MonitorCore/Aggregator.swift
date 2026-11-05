@@ -264,20 +264,22 @@ public struct Aggregator: Sendable {
         let retained = Set(entered.compactMap { pid, tick in
             present.contains(pid) && processTick - tick < 2 ? pid : nil
         })
-        var next = retained.compactMap { processes[$0]?.row }
-        let slots = max(0, 3 - next.count)
+        var next = retained.compactMap { processes[$0]?.row }.sorted(by: Self.before)
+        // Only three places are visible; avoid sorting the entire process table.
         var challengers: [ProcRow] = []
-        if slots > 0 {
-            // Only three places are visible; avoid sorting the entire process table.
-            for pid in present where !retained.contains(pid) {
-                guard let row = processes[pid]?.row else { continue }
-                if challengers.count == slots, let last = challengers.last, !Self.before(row, last) { continue }
-                let index = challengers.firstIndex { Self.before(row, $0) } ?? challengers.count
-                challengers.insert(row, at: index)
-                if challengers.count > slots { challengers.removeLast() }
-            }
+        for pid in present where !retained.contains(pid) {
+            guard let row = processes[pid]?.row else { continue }
+            if challengers.count == 3, let last = challengers.last, !Self.before(row, last) { continue }
+            let index = challengers.firstIndex { Self.before(row, $0) } ?? challengers.count
+            challengers.insert(row, at: index)
+            if challengers.count > 3 { challengers.removeLast() }
         }
-        next += challengers
+        while next.count < 3, !challengers.isEmpty { next.append(challengers.removeFirst()) }
+        // The hold stops near-equal rows from swapping places. It must not keep a much
+        // hotter newcomer out for two whole scans (16 s on an 8 s cadence).
+        while let weakest = next.last, let best = challengers.first, Self.clearlyHotter(best, than: weakest) {
+            next.removeLast(); next.append(challengers.removeFirst()); next.sort(by: Self.before)
+        }
         next.sort(by: Self.before)
         let pids = Set(next.map(\.pid))
         entered = entered.filter { pids.contains($0.key) }
@@ -286,6 +288,9 @@ public struct Aggregator: Sendable {
         refreshUnsmoothed()
     }
 
+    private static func clearlyHotter(_ a: ProcRow, than b: ProcRow) -> Bool {
+        a.cpuPercent >= b.cpuPercent * 2 && a.cpuPercent >= b.cpuPercent + 10
+    }
     private static func topThree(_ rows: [ProcRow]) -> [ProcRow] {
         var top: [ProcRow] = []
         for row in rows {

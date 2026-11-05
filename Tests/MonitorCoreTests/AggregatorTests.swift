@@ -72,16 +72,28 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     var a = Aggregator(machineName: "Mac", chipName: "M5")
     a.updateProcesses([proc(0, 1000), proc(1, 90), proc(2, 80), proc(3, 70), proc(4, 1)], at: time)
     #expect(a.snapshot.topProcesses.map(\.pid) == [1, 2, 3])
-    let changed = [proc(1, 1), proc(2, 1), proc(3, 1, name: "renamed", rss: 99), proc(4, 200)]
+    let changed = [proc(1, 1, name: "renamed", rss: 99), proc(2, 1), proc(3, 1), proc(4, 200)]
     a.updateProcesses(changed, at: time)
-    #expect(Set(a.snapshot.topProcesses.map(\.pid)) == Set([1, 2, 3]))
-    #expect(a.snapshot.topProcesses.first { $0.pid == 3 }?.name == "renamed")
-    #expect(a.snapshot.topProcesses.first { $0.pid == 3 }?.residentBytes == 99)
+    // Held members keep their places, except against a clearly hotter newcomer (4 at 100.5
+    // against 3 at 35.5), which takes the weakest held place at once.
+    #expect(a.snapshot.topProcesses.map(\.pid) == [4, 1, 2])
+    #expect(a.snapshot.topProcesses.first { $0.pid == 1 }?.name == "renamed")
+    #expect(a.snapshot.topProcesses.first { $0.pid == 1 }?.residentBytes == 99)
     a.updateProcesses(changed, at: time)
     #expect(a.snapshot.topProcesses.map(\.pid) == [4, 1, 2])
     // A newly selected pid vanishes before its two guaranteed ticks: drop immediately.
     a.updateProcesses([proc(1, 1), proc(2, 1), proc(3, 1)], at: time)
     #expect(a.snapshot.topProcesses.map(\.pid).contains(4) == false)
+}
+
+@Test func aggregatorHoldStillStopsNearEqualSwaps() {
+    var a = Aggregator(machineName: "Mac", chipName: "M5")
+    a.updateProcesses([proc(1, 50), proc(2, 40), proc(3, 30), proc(4, 20)], at: time)
+    let next = [proc(1, 50), proc(2, 40), proc(3, 20), proc(4, 40)]
+    a.updateProcesses(next, at: time) // 4 at 30 against held 3 at 25: not clearly hotter.
+    #expect(a.snapshot.topProcesses.map(\.pid) == [1, 2, 3])
+    a.updateProcesses(next, at: time) // Hold over: plain ranking, 4 at 35 beats 3 at 22.5.
+    #expect(a.snapshot.topProcesses.map(\.pid) == [1, 2, 4])
 }
 
 @Test func aggregatorProcessEMAForgettingAndFailureCarry() {
@@ -118,8 +130,10 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.topProcesses[0].name == "WindowServer")
     #expect(a.snapshot.topProcesses[0].cpuPercent == 100)
     a.updateProcesses([proc(1, 0), proc(2, 0), proc(3, 0), proc(4, 1000)], at: time)
-    #expect(Set(a.snapshot.topProcesses.map(\.pid)) == Set([1, 2, 3]))
-    #expect(a.snapshot.topProcesses[0].cpuPercent == 50)
+    // Names did not advance the hold or smooth again: 1 is at 50 after one blend, and the
+    // clearly hotter 4 took the weakest held place.
+    #expect(a.snapshot.topProcesses.map(\.pid) == [4, 1, 2])
+    #expect(a.snapshot.topProcesses.first { $0.pid == 1 }?.cpuPercent == 50)
     // The popover list ranks by the latest rates alone: the hot newcomer is in at once.
     #expect(a.snapshot.unsmoothed?.topProcesses.first?.pid == 4)
 }
