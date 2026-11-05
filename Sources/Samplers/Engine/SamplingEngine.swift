@@ -326,8 +326,8 @@ final class SamplingState: @unchecked Sendable {
         lastKey = key
         if profile {
             let shown = popoverOpen ? snapshot.forPopover : snapshot
-            fputs(String(format: "PUBLISH cpu=%.1f top=%@ topcpu=%.1f\n", shown.cpuPercent ?? -1,
-                         shown.topProcesses.first?.name ?? "-", shown.topProcesses.first?.cpuPercent ?? -1), stderr)
+            let top = shown.topProcesses.prefix(3).map { "\($0.name):\(Int($0.cpuPercent.rounded()))" }.joined(separator: ",")
+            fputs(String(format: "PUBLISH cpu=%.1f top=%@\n", shown.cpuPercent ?? -1, top), stderr)
         }
         publish?(snapshot)
     }
