@@ -477,8 +477,8 @@ func malformedMappedPayloadFallsBackAndRetainsFault(value: Double) {
     #expect(fake.reads["cpu", default: 0] == reads)
     now += 0.8; state.timedFastTick()
     #expect(fake.reads["cpu", default: 0] == reads + 1)
-    #expect(SamplingCadence.fastInterval(popoverOpen: true) == 1)
-    #expect(SamplingCadence.fastInterval(popoverOpen: false) == 2)
+    #expect(SamplingCadence.fastInterval(watching: true) == 1)
+    #expect(SamplingCadence.fastInterval(watching: false) == 2)
     var s = Snapshot.preview
     s.unsmoothed = Snapshot.Unsmoothed(cpuPercent: 91, gpuPercent: s.gpuPercent, cpuTemp: s.cpuTemp, gpuTemp: s.gpuTemp, topProcesses: s.topProcesses)
     var q = MenuBarQuantizer()
@@ -490,9 +490,9 @@ func malformedMappedPayloadFallsBackAndRetainsFault(value: Double) {
 }
 
 @Test func openPopoverScansProcessesEveryTwoSecondsAndMergesNearScans() {
-    #expect(SamplingCadence.processInterval(closed: 5, popoverOpen: true) == 2)
-    #expect(SamplingCadence.processInterval(closed: 8, popoverOpen: true) == 2)
-    #expect(SamplingCadence.processInterval(closed: 8, popoverOpen: false) == 8)
+    #expect(SamplingCadence.processInterval(closed: 5, watching: true) == 2)
+    #expect(SamplingCadence.processInterval(closed: 8, watching: true) == 2)
+    #expect(SamplingCadence.processInterval(closed: 8, watching: false) == 8)
     var now = 100.0
     let fake = FakeSet(), queue = DispatchQueue(label: "wp41.process")
     queue.suspend()
@@ -504,4 +504,17 @@ func malformedMappedPayloadFallsBackAndRetainsFault(value: Double) {
     #expect(fake.reads["procs", default: 0] == scans)
     now += 2; state.timedProcessTick()
     #expect(fake.reads["procs", default: 0] == scans + 1)
+}
+
+@Test func watchedPanelPublishesUnsmoothedChangesWithoutThePopoverKey() {
+    var s = Snapshot.preview
+    s.unsmoothed = Snapshot.Unsmoothed(cpuPercent: 91, gpuPercent: s.gpuPercent, cpuTemp: s.cpuTemp, gpuTemp: s.gpuTemp, topProcesses: s.topProcesses)
+    var q = MenuBarQuantizer()
+    let values = q.update(s)
+    var changed = s; changed.unsmoothed?.cpuPercent = 12
+    let o = DisplayOptions()
+    #expect(publicationKey(s, options: o, menuValues: values, watching: true) != publicationKey(changed, options: o, menuValues: values, watching: true))
+    #expect(publicationKey(s, options: o, menuValues: values, watching: false) == publicationKey(changed, options: o, menuValues: values, watching: false))
+    #expect(!publicationKey(s, options: o, menuValues: values, watching: true).contains("|popover:"))
+    #expect(SamplingCadence.fastInterval(watching: true) == 1 && SamplingCadence.processInterval(closed: 5, watching: true) == 2)
 }

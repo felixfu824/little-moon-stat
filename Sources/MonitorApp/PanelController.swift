@@ -8,6 +8,17 @@ import MonitorUI
 final class DraggableHostingView<Content: View>: NSHostingView<Content> {
     var onContentSizeChange: (() -> Void)?
     var settingsMenu: (() -> NSMenu)?
+    /// Pointer entered (true) or left (false) the panel. Works while the app is inactive.
+    var onHover: ((Bool) -> Void)?
+    private var hoverArea: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area); hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { super.mouseEntered(with: event); onHover?(true) }
+    override func mouseExited(with event: NSEvent) { super.mouseExited(with: event); onHover?(false) }
     override func menu(for event: NSEvent) -> NSMenu? { settingsMenu?() }
     override func rightMouseDown(with event: NSEvent) { showContextMenu(event) }
     override func mouseDown(with event: NSEvent) {
@@ -49,6 +60,12 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     /// Called with the new origin after a user drag.
     var onUserMoved: ((NSPoint) -> Void)?
+
+    /// Pointer over the panel, for watch mode.
+    var onHover: ((Bool) -> Void)? {
+        get { host.onHover }
+        set { host.onHover=newValue }
+    }
 
     var settingsMenu: (() -> NSMenu)? {
         get { host.settingsMenu }

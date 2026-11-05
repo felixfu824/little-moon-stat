@@ -22,8 +22,8 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.unsmoothed?.cpuPercent == 80)
     #expect(a.snapshot.unsmoothed?.gpuPercent == 60)
     #expect(a.snapshot.unsmoothed?.cpuTemp == TempStat(peak: 100, average: 80, sensorCount: 12))
-    #expect(a.snapshot.forPopover.cpuPercent == 80)
-    #expect(a.snapshot.forPopover.unsmoothed == nil)
+    #expect(a.snapshot.forWatching.cpuPercent == 80)
+    #expect(a.snapshot.forWatching.unsmoothed == nil)
     #expect(a.snapshot.cpuTemp == TempStat(peak: 90, average: 70, sensorCount: 12))
     #expect(a.snapshot.gpuTemp == a.snapshot.cpuTemp)
 }

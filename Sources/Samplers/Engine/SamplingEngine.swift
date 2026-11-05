@@ -40,9 +40,10 @@ public final class SamplingEngine: MonitorEngine {
             queue.async { [queue] in state.setDetails(enabled, on: queue) }
         }
     }
-    public func setPopoverOpen(_ open: Bool) {
+    /// Watch mode: the popover is open, or the pointer rests on the desktop panel.
+    public func setWatch(popover: Bool, panel: Bool) {
         let state=state
-        queue.async { [queue] in state.setPopoverOpen(open, on: queue) }
+        queue.async { [queue] in state.setWatch(popover: popover, panel: panel, on: queue) }
     }
     public func setPresentationOptions(_ options: DisplayOptions) {
         guard options != presentationOptions else { return }
@@ -119,6 +120,9 @@ final class SamplingState: @unchecked Sendable {
     private var details = true
     private var wasDetailSampling = false
     private(set) var popoverOpen = false
+    private(set) var panelWatched = false
+    /// Someone is watching: faster cadences and the unsmoothed readings in the publication key.
+    var watching: Bool { popoverOpen || panelWatched }
     /// When the last fast tick ran. Timer-driven ticks closer than half a second to it are
     /// merged away, so a warm-up and a regular tick never read the same moment twice.
     private var lastFastTickAt: Double?
@@ -195,24 +199,26 @@ final class SamplingState: @unchecked Sendable {
         preparing = false
         if isInitial || resetSMC || longPause { fastTick() }
         else { publishIfChanged() }
-        fastTimer = timer(on: queue, every: SamplingCadence.fastInterval(popoverOpen: popoverOpen)) { [weak self] in self?.timedFastTick() }
+        fastTimer = timer(on: queue, every: SamplingCadence.fastInterval(watching: watching)) { [weak self] in self?.timedFastTick() }
         if details {
             startDetailTimers(on: queue, processInterval: processInterval)
             if isInitial || enteringDetails || resetSMC || longPause { startWarmUp(on: queue) }
         }
     }
 
-    /// An open popover reads the fast metrics every second; closed, every two. The next
-    /// tick moves to one new period from now; process and disk cadences do not change.
-    func setPopoverOpen(_ open: Bool, on queue: DispatchQueue) {
-        guard popoverOpen != open else { return }
-        popoverOpen = open
+    /// Watching reads the fast metrics every second and processes every two seconds; calm,
+    /// every 2 s and 5 or 8 s. A change moves the next tick to one new period from now.
+    func setWatch(popover: Bool, panel: Bool, on queue: DispatchQueue) {
+        let was = watching
+        popoverOpen = popover; panelWatched = panel
+        guard was != watching else { return }
+        let open = watching
         if let fastTimer {
-            let seconds = SamplingCadence.fastInterval(popoverOpen: open)
+            let seconds = SamplingCadence.fastInterval(watching: open)
             fastTimer.schedule(deadline: .now() + seconds, repeating: seconds, leeway: .milliseconds(Int(seconds * 100)))
         }
         if let processTimer, details {
-            let seconds = SamplingCadence.processInterval(closed: processBaseInterval, popoverOpen: open)
+            let seconds = SamplingCadence.processInterval(closed: processBaseInterval, watching: open)
             processTimer.schedule(deadline: .now() + seconds, repeating: seconds, leeway: .milliseconds(Int(seconds * 100)))
         }
     }
@@ -255,7 +261,7 @@ final class SamplingState: @unchecked Sendable {
     }
 
     private func startDetailTimers(on queue: DispatchQueue, processInterval: Double) {
-        let seconds = SamplingCadence.processInterval(closed: processInterval, popoverOpen: popoverOpen)
+        let seconds = SamplingCadence.processInterval(closed: processInterval, watching: watching)
         let process = timer(on: queue, every: seconds) { [weak self] in self?.timedProcessTick() }
         processTimer = process
         processBaseInterval = processInterval
@@ -340,11 +346,11 @@ final class SamplingState: @unchecked Sendable {
         }
         let values=menuQuantizer.update(snapshot,unit:presentationOptions.temperatureUnit)
         menuBarValues=values
-        let key = measured("key") { publicationKey(snapshot,options:presentationOptions,menuValues:values,popoverOpen:popoverOpen) }
+        let key = measured("key") { publicationKey(snapshot,options:presentationOptions,menuValues:values,popoverOpen:popoverOpen,watching:watching) }
         guard key != lastKey else { return }
         lastKey = key
         if profile {
-            let shown = popoverOpen ? snapshot.forPopover : snapshot
+            let shown = watching ? snapshot.forWatching : snapshot
             let top = shown.topProcesses.prefix(3).map { "\($0.name):\(Int($0.cpuPercent.rounded()))" }.joined(separator: ",")
             fputs(String(format: "PUBLISH cpu=%.1f top=%@\n", shown.cpuPercent ?? -1, top), stderr)
         }
@@ -375,10 +381,10 @@ final class SamplingState: @unchecked Sendable {
 enum SamplingCadence {
     static func processInterval(logicalCoreCount: Int) -> Double { logicalCoreCount <= 10 ? 8 : 5 }
     static func discoveryEvery(processInterval: Double) -> Int { max(1, Int(25 / processInterval)) }
-    static func fastInterval(popoverOpen: Bool) -> Double { popoverOpen ? 1 : 2 }
-    /// An open popover is someone watching: the top three refresh every 2 s. The watch budget
-    /// is 3.5 % of one core with children (Mole's own process alone measured 3.5 % on the Air).
-    static func processInterval(closed: Double, popoverOpen: Bool) -> Double { popoverOpen ? min(closed, 2) : closed }
+    static func fastInterval(watching: Bool) -> Double { watching ? 1 : 2 }
+    /// Watching refreshes the top three every 2 s. The watch budget is 3.5 % of one core with
+    /// children (Mole's own status process alone measured 3.5 % on the Air).
+    static func processInterval(closed: Double, watching: Bool) -> Double { watching ? min(closed, 2) : closed }
     static let warmUpFast = 1.0
     static let warmUpProcess = 2.0
     static let minimumCPUWindow = 0.5
@@ -387,16 +393,16 @@ enum SamplingCadence {
 
 /// Publication follows visible precision, never raw sensor noise. Explicit/system
 /// Fahrenheit still gets its finer visible digit transitions without a raw key.
-func publicationKey(_ snapshot: Snapshot, options: DisplayOptions, menuValues: MenuBarValues, popoverOpen: Bool = false) -> String {
+func publicationKey(_ snapshot: Snapshot, options: DisplayOptions, menuValues: MenuBarValues, popoverOpen: Bool = false,
+                    watching: Bool? = nil) -> String {
     var result=displayKey(snapshot)
     if DisplayFormat.resolvedUnit(options.temperatureUnit) == .fahrenheit {
         result += [snapshot.cpuTemp?.peak,snapshot.cpuTemp?.average,snapshot.gpuTemp?.peak,snapshot.gpuTemp?.average]
             .map { DisplayFormat.temperature($0,unit:.fahrenheit) }.joined(separator:"|")
     }
     if options.displayMode != .desktop { result += menuValues.key(options.menuBarMoons) }
-    if popoverOpen {
-        let shown = snapshot.forPopover
-        result += "|popover:" + displayKey(shown) + "|" + PopoverPresentation.key(shown)
-    }
+    // A watched surface shows the unsmoothed readings, so their visible changes publish too.
+    if watching ?? popoverOpen { result += "|watch:" + displayKey(snapshot.forWatching) }
+    if popoverOpen { result += "|popover:" + PopoverPresentation.key(snapshot.forWatching) }
     return result
 }

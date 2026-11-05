@@ -96,8 +96,8 @@ public struct Snapshot: Sendable, Equatable {
     public var thermal: ThermalLevel?
     /// How far each field can be trusted (WP-V). Defaults to all live, so fixtures stay as they were.
     public var status: SnapshotStatus
-    /// The same validated readings without display smoothing, for the popover. nil (fixtures,
-    /// previews) means the popover shows the smoothed fields.
+    /// The same validated readings without display smoothing, for watch mode. nil (fixtures,
+    /// previews) means a watched surface shows the smoothed fields.
     public var unsmoothed: Unsmoothed?
 
     public struct Unsmoothed: Sendable, Equatable {
@@ -114,9 +114,9 @@ public struct Snapshot: Sendable, Equatable {
         }
     }
 
-    /// The popover is watched closely, so it shows each new reading as it arrives.
-    /// The desktop panel and the menu-bar moons keep the calmer smoothed fields.
-    public var forPopover: Snapshot {
+    /// What a watched surface shows (open popover, or the desktop panel under a resting
+    /// pointer): each new reading as it arrives. Otherwise the calmer smoothed fields.
+    public var forWatching: Snapshot {
         guard let u = unsmoothed else { return self }
         var s = self
         s.cpuPercent = u.cpuPercent; s.gpuPercent = u.gpuPercent

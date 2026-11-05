@@ -10,10 +10,14 @@ func log(_ message: String) {
 }
 
 /// Root SwiftUI view. Evaluating `makeCard` inside `body` lets Observation track `store.snapshot`.
+/// Whether the pointer has rested on the desktop panel long enough to count as watching.
+@MainActor @Observable final class PanelWatch { var active = false }
+
 private struct CardRoot: View {
     let store: SnapshotStore
     let options: DisplayOptions
-    var body: some View { makeCard(store: store, options: options) }
+    let watch: PanelWatch
+    var body: some View { makeCard(store: store, options: options, watching: watch.active) }
 }
 
 @MainActor
@@ -25,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var statusItem: NSStatusItem!
     private var moons: MoonStatusController!
     private var popoverOpen = false
+    private let panelWatch = PanelWatch()
+    private var panelWatched = false
+    private var hoverTimer: Timer?
     private var statusHidden = false
     private var desktopContentActive = true
     private var sessionLocked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
@@ -55,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         configurePresentation(options, engine: engine)
         panel = PanelController(rootView: cardView(), glass: options.glass)
         panel.onOcclusionChanged = { [weak self] in self?.updateRunState() }
+        panel.onHover = { [weak self] inside in self?.panelHoverChanged(inside) }
         panel.onUserMoved = { [weak self] origin in self?.settings.panelOrigin = origin }
 
         panel.place(origin: settings.panelOrigin)
@@ -99,7 +107,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationWillTerminate(_ notification: Notification) { tour?.abandon(); reportCancellation?.cancel(); engine.stop() }
 
-    private func cardView() -> AnyView { AnyView(CardRoot(store: store, options: options)) }
+    private func cardView() -> AnyView { AnyView(CardRoot(store: store, options: options, watch: panelWatch)) }
+
+    // MARK: Watch mode on the desktop panel
+
+    /// Watching starts after the pointer rests on the panel for 1 s and ends 3 s after it
+    /// leaves, so a pointer crossing the desktop does not flip modes.
+    private func panelHoverChanged(_ inside: Bool) {
+        hoverTimer?.invalidate()
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: inside ? 1 : 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.setPanelWatched(inside) }
+        }
+    }
+    private func setPanelWatched(_ requested: Bool) {
+        let on = requested && panelVisible && panel.isUnoccluded && desktopContentActive
+        guard on != panelWatched else { return }
+        panelWatched = on
+        panelWatch.active = on
+        setWatchSampling(popover: popoverOpen, panel: on, engine: engine)
+        log("panel watching=\(on)")
+    }
     // Keep geometry while removing the hidden card's Observation subscriptions.
     // A bare EmptyView has a 10 pt hosting minimum and would persist a false origin.
     private func inactiveCardView() -> AnyView {
@@ -112,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard !launching else { return }
         tourEnvironmentChanged()
         setDesktopContentActive(panelVisible && panel.isUnoccluded)
+        if panelWatched && !(panelVisible && panel.isUnoccluded) { hoverTimer?.invalidate(); setPanelWatched(false) }
         setSamplingDetails(detailVisible, engine: engine)
         if shouldRun, !engineRunning {
             engine.resume()
@@ -257,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             guard let self else { return }
             self.popoverOpen = open
             self.tour?.anchorChanged()
-            setPopoverSampling(open, engine:self.engine)
+            setWatchSampling(popover: open, panel: self.panelWatched, engine: self.engine)
             self.updateRunState()
         }
         moons.onVisibility = { [weak self] hidden in
@@ -288,6 +316,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
     private func scheduleMenuBarChecks() {
         let args = CommandLine.arguments
+        if args.contains("--panel-hover") {
+            // Debug: as if the pointer came to rest on the panel 2 s after launch.
+            DispatchQueue.main.asyncAfter(deadline: .now()+2) { [weak self] in self?.panelHoverChanged(true) }
+        }
         if args.contains("--menubar-popover") {
             DispatchQueue.main.asyncAfter(deadline: .now()+2) { [weak self] in self?.moons.togglePopover() }
         }

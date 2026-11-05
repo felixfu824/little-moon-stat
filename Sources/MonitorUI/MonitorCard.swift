@@ -11,14 +11,18 @@ private let hotColor = Color(red: 1, green: 179 / 255, blue: 64 / 255)
 public struct MonitorCard: View {
   private let store: SnapshotStore
   private let options: DisplayOptions
-  public init(store: SnapshotStore, options: DisplayOptions) {
+  /// Watch mode (pointer resting on the panel): show each reading as it arrives.
+  private let watching: Bool
+  public init(store: SnapshotStore, options: DisplayOptions, watching: Bool = false) {
     self.store = store
     self.options = options
+    self.watching = watching
   }
   public var body: some View {
+    let snapshot = watching ? store.snapshot.forWatching : store.snapshot
     switch options.size {
-    case .large: LargeCard(snapshot: store.snapshot, options: options)
-    case .medium: MediumCard(snapshot: store.snapshot, options: options)
+    case .large: LargeCard(snapshot: snapshot, options: options)
+    case .medium: MediumCard(snapshot: snapshot, options: options)
     }
   }
 }

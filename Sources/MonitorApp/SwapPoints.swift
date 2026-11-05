@@ -36,8 +36,8 @@ func makeEngine(store: SnapshotStore) -> MonitorEngine {
 /// The card draws on a transparent background (the app supplies the glass).
 @MainActor
 @ViewBuilder
-func makeCard(store: SnapshotStore, options: DisplayOptions) -> some View {
-    MonitorCard(store: store, options: options)
+func makeCard(store: SnapshotStore, options: DisplayOptions, watching: Bool = false) -> some View {
+    MonitorCard(store: store, options: options, watching: watching)
 }
 
 /// Presentation visibility changes only the concrete sampler's detail work.
@@ -58,6 +58,6 @@ func connectMenuBar(engine: MonitorEngine, handler: @escaping (MenuBarValues?) -
 }
 
 @MainActor
-func setPopoverSampling(_ open: Bool, engine: MonitorEngine) {
-    (engine as? SamplingEngine)?.setPopoverOpen(open)
+func setWatchSampling(popover: Bool, panel: Bool, engine: MonitorEngine) {
+    (engine as? SamplingEngine)?.setWatch(popover: popover, panel: panel)
 }
