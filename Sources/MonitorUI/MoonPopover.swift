@@ -5,13 +5,15 @@ public struct MoonPopover: View {
     public let snapshot: Snapshot
     public let options: DisplayOptions
     public var cost: Double?
+    /// The figure from the previous open, shown until this open's first measurement.
+    public var lastCost: Double?
     private let actionIdentity: ObjectIdentifier?
     public var onMode: (DisplayMode) -> Void
     public var onSettings: () -> Void
-    public init(snapshot: Snapshot, options: DisplayOptions, cost: Double? = nil,
+    public init(snapshot: Snapshot, options: DisplayOptions, cost: Double? = nil, lastCost: Double? = nil,
                 onMode: @escaping (DisplayMode) -> Void = { _ in }, onSettings: @escaping () -> Void = {},
                 actionIdentity: ObjectIdentifier? = nil) {
-        self.snapshot = snapshot; self.options = options; self.cost = cost; self.onMode = onMode; self.onSettings = onSettings; self.actionIdentity = actionIdentity
+        self.snapshot = snapshot; self.options = options; self.cost = cost; self.lastCost = lastCost; self.onMode = onMode; self.onSettings = onSettings; self.actionIdentity = actionIdentity
     }
     private var zh: Bool { options.language == .traditionalChinese }
     private func text(_ en: String, _ zh: String) -> String { self.zh ? zh : en }
@@ -50,6 +52,7 @@ public struct MoonPopover: View {
             MoonFooter(mode: options.displayMode, language: options.language,
                        onMode: onMode, onSettings: onSettings, actionIdentity: actionIdentity).equatable()
             Text(cost.map { text("This monitor uses \(DisplayFormat.number($0, decimals: 1))% of one CPU core", "本程式佔用單核心 \(DisplayFormat.number($0, decimals: 1))% CPU") }
+                 ?? lastCost.map { text("Last time, this monitor used \(DisplayFormat.number($0, decimals: 1))% of one CPU core", "上次本程式佔用單核心 \(DisplayFormat.number($0, decimals: 1))% CPU") }
                  ?? text("Measuring monitor CPU…", "正在測量程式 CPU…"))
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7)).padding(.top, -6)
         }.padding(16).frame(width: 360).foregroundStyle(.white).monospacedDigit()

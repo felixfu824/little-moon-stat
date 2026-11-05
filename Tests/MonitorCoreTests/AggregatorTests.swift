@@ -16,8 +16,9 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.cpuPercent == 20)
     #expect(a.snapshot.gpuPercent == 40)
     fast(&a, 80, 60, TempStat(peak: 100, average: 80, sensorCount: 12))
-    #expect(a.snapshot.cpuPercent == 50)
-    #expect(a.snapshot.gpuPercent == 50)
+    // Percentages blend 70 % new; temperatures keep the even blend.
+    #expect(abs((a.snapshot.cpuPercent ?? 0) - 62) < 1e-9)
+    #expect(abs((a.snapshot.gpuPercent ?? 0) - 54) < 1e-9)
     #expect(a.snapshot.cpuTemp == TempStat(peak: 90, average: 70, sensorCount: 12))
     #expect(a.snapshot.gpuTemp == a.snapshot.cpuTemp)
 }
@@ -82,7 +83,7 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     var a = Aggregator(machineName: "Mac", chipName: "M5")
     a.updateProcesses([proc(1, 100)], at: time)
     a.updateProcesses([proc(1, 20)], at: time)
-    #expect(a.snapshot.topProcesses.first?.cpuPercent == 60)
+    #expect(abs((a.snapshot.topProcesses.first?.cpuPercent ?? 0) - 44) < 1e-9)
     for _ in 0..<2 { a.updateProcesses(nil, at: time); #expect(a.snapshot.topProcesses.count == 1) }
     a.updateProcesses(nil, at: time)
     #expect(a.snapshot.topProcesses.isEmpty)
@@ -112,7 +113,20 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.topProcesses[0].cpuPercent == 100)
     a.updateProcesses([proc(1, 0), proc(2, 0), proc(3, 0), proc(4, 1000)], at: time)
     #expect(Set(a.snapshot.topProcesses.map(\.pid)) == Set([1, 2, 3]))
-    #expect(a.snapshot.topProcesses[0].cpuPercent == 50)
+    #expect(abs(a.snapshot.topProcesses[0].cpuPercent - 30) < 1e-9)
+}
+
+@Test func aggregatorRestartedProcessSmoothingTakesTheNextScanRaw() {
+    var a = Aggregator(machineName: "Mac", chipName: "M5")
+    a.updateProcesses([proc(1, 100), proc(2, 5)], at: time)
+    a.restartProcessSmoothing()
+    a.updateProcesses([proc(1, 4), proc(2, 90)], at: time)
+    // Held figures are replaced, not blended; membership rules still apply.
+    #expect(a.snapshot.topProcesses.map(\.pid) == [2, 1])
+    #expect(a.snapshot.topProcesses.map(\.cpuPercent) == [90, 4])
+    // Only one scan is raw; the next one blends again.
+    a.updateProcesses([proc(1, 4), proc(2, 0)], at: time)
+    #expect(abs(a.snapshot.topProcesses.first { $0.pid == 2 }!.cpuPercent - 27) < 1e-9)
 }
 
 @Test func aggregatorDisplayKeyUsesVisiblePrecisionAndAllVisibleFields() {

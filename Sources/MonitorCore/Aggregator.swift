@@ -74,6 +74,7 @@ public struct Aggregator: Sendable {
     private var processTick = 0
     private var processMisses = 0
     private var processesEverScanned = false
+    private var processSmoothingRestart = false
     public private(set) var snapshot: Snapshot
 
     public init(machineName: String, chipName: String, identityStatus: MetricStatus = .live,
@@ -103,8 +104,8 @@ public struct Aggregator: Sendable {
     /// Status-aware fast tick. Pass nil for a metric that was not sampled on this tick.
     public mutating func updateFast(cpu: Sample<Double>?, gpu: Sample<Double>?, temperatures: TemperatureSample?,
                                     memory: Sample<MemoryStat>?, thermal: Sample<ThermalLevel>?, at date: Date) {
-        self.cpu.update(cpu.map(Self.checkedPercent), blend: Self.ema)
-        self.gpu.update(gpu.map(Self.checkedPercent), blend: Self.ema)
+        self.cpu.update(cpu.map(Self.checkedPercent), blend: Self.emaFast)
+        self.gpu.update(gpu.map(Self.checkedPercent), blend: Self.emaFast)
         let rawCPU = cpu?.value.flatMap { $0.isFinite ? $0 : nil }
         if let temperatures {
             Self.updateTemperature(&cpuTemp, temperatures.cpu, jump: &cpuJump, stuck: &cpuStuck,
@@ -225,14 +226,16 @@ public struct Aggregator: Sendable {
         }
         processMisses = 0
         processesEverScanned = true
+        let restartSmoothing = processSmoothingRestart
+        processSmoothingRestart = false
         snapshot.status.processes = sample.quality == .estimated ? .estimated(sample.source, fault: sample.fault)
                                                                  : .live(sample.source)
         var present = Set<Int32>()
         for var row in rows where row.pid != 0 && row.cpuPercent.isFinite && row.cpuPercent >= 0 {
             guard present.insert(row.pid).inserted else { continue }
             if let prior = processes[row.pid], prior.row.startTime == row.startTime {
-                row.cpuPercent = freshPIDs?.contains(row.pid) == false
-                    ? prior.row.cpuPercent : Self.ema(prior.row.cpuPercent, row.cpuPercent)
+                if freshPIDs?.contains(row.pid) == false { row.cpuPercent = prior.row.cpuPercent }
+                else if !restartSmoothing { row.cpuPercent = Self.emaFast(prior.row.cpuPercent, row.cpuPercent) }
             } else { entered[row.pid] = nil }
             processes[row.pid] = ProcessState(row: row, lastSeen: processTick)
         }
@@ -279,6 +282,13 @@ public struct Aggregator: Sendable {
         a.cpuPercent == b.cpuPercent ? a.pid < b.pid : a.cpuPercent > b.cpuPercent
     }
     private static func ema(_ old: Double, _ new: Double) -> Double { old * 0.5 + new * 0.5 }
+    /// CPU, GPU and process percentages: 70 % new, so a step shows 90 % within two ticks.
+    /// Temperatures keep the even blend because SMC peaks are noisier.
+    private static func emaFast(_ old: Double, _ new: Double) -> Double { old * 0.3 + new * 0.7 }
+
+    /// After detail sampling was off, held per-process figures are old. The next
+    /// successful scan replaces them instead of blending with them. Membership is unchanged.
+    public mutating func restartProcessSmoothing() { processSmoothingRestart = true }
     private static func smoothTemp(_ old: TempStat, _ new: TempStat) -> TempStat {
         TempStat(peak: ema(old.peak, new.peak), average: ema(old.average, new.average), sensorCount: new.sensorCount)
     }

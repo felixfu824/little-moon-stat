@@ -17,6 +17,12 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 git -C "$ROOT" diff --quiet HEAD 2>/dev/null || COMMIT="$COMMIT-dirty"
 /usr/libexec/PlistBuddy -c "Add :MonitorCommit string $COMMIT" "$APP/Contents/Info.plist"
+# App icon: compile the Icon Composer document into Assets.car (macOS 26 appearances)
+# plus AppIcon.icns. actool needs Xcode and must run outside a sandbox.
+xcrun actool "$ROOT/Resources/AppIcon.icon" --compile "$APP/Contents/Resources" \
+  --app-icon AppIcon --platform macosx --minimum-deployment-target 26.0 \
+  --output-partial-info-plist "$ROOT/build/AppIcon-partial.plist" --output-format human-readable-text >/dev/null
+test -f "$APP/Contents/Resources/Assets.car" && test -f "$APP/Contents/Resources/AppIcon.icns"
 # SwiftPM resource bundles (String Catalog etc.), if any target declares resources.
 for b in "$BIN_DIR"/*.bundle; do
   [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"

@@ -1,0 +1,32 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.14118,0.21176,0.36078,1.00000",
+      "srgb:0.32941,0.25098,0.43529,1.00000"
+    ],
+    "orientation" : { "start" : { "x" : 0.25, "y" : 0 }, "stop" : { "x" : 0.75, "y" : 1 } }
+  },
+  "fill-specializations" : [
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.07059,0.08235,0.11373,1.00000",
+          "srgb:0.12941,0.10980,0.17647,1.00000"
+        ],
+        "orientation" : { "start" : { "x" : 0.25, "y" : 0 }, "stop" : { "x" : 0.75, "y" : 1 } }
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        { "image-name" : "moon.svg", "name" : "moon" },
+        { "image-name" : "disc.svg", "name" : "disc", "glass" : false }
+      ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
+      "translucency" : { "enabled" : true, "value" : 0.4 }
+    }
+  ],
+  "supported-platforms" : { "squares" : "shared" }
+}

@@ -179,13 +179,17 @@ final class SamplingState: @unchecked Sendable {
                 // baseline result; short resumes wait for the existing next delta.
                 if !resetSMC && !longPause { _ = readings.sampleCPUStatus() }
                 if aggregator?.snapshot.disk == nil { diskTick() }
+                aggregator?.restartProcessSmoothing()
             }
         }
         preparing = false
         if isInitial || resetSMC || longPause { fastTick() }
         else { publishIfChanged() }
         fastTimer = timer(on: queue, every: 2) { [weak self] in self?.fastTick() }
-        if details { startDetailTimers(on: queue, processInterval: processInterval) }
+        if details {
+            startDetailTimers(on: queue, processInterval: processInterval)
+            if isInitial || enteringDetails || resetSMC || longPause { startWarmUp(on: queue) }
+        }
     }
 
     /// A visibility change only changes the optional detail cadence. Keep the fast
@@ -198,10 +202,30 @@ final class SamplingState: @unchecked Sendable {
         if enabled {
             (samplers.cpu as? CPUUsageSampler)?.reset()
             samplers.resetProcesses()
+            aggregator?.restartProcessSmoothing()
             _ = readings.sampleCPUStatus()
             if aggregator?.snapshot.disk == nil { diskTick() }
             startDetailTimers(on: queue, processInterval: SamplingCadence.processInterval(logicalCoreCount: ProcessInfo.processInfo.processorCount))
+            startWarmUp(on: queue)
         }
+    }
+
+    /// Details just came back (popover opened, panel uncovered). The new baselines were
+    /// taken now; rather than wait up to a full period, read CPU, GPU and thermal after
+    /// 1 s and processes after 2 s. One extra fast tick and one process scan, then nothing.
+    /// They sit in detailTimers so a pause or a hide cancels them.
+    private func startWarmUp(on queue: DispatchQueue) {
+        detailTimers += [
+            oneShot(on: queue, after: SamplingCadence.warmUpFast) { [weak self] in self?.fastTick() },
+            oneShot(on: queue, after: SamplingCadence.warmUpProcess) { [weak self] in self?.processTick() }
+        ]
+    }
+    private func oneShot(on queue: DispatchQueue, after seconds: Double, handler: @escaping () -> Void) -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + seconds, repeating: .never, leeway: .milliseconds(100))
+        timer.setEventHandler(handler: handler)
+        timer.resume()
+        return timer
     }
 
     private func startDetailTimers(on queue: DispatchQueue, processInterval: Double) {
@@ -302,6 +326,8 @@ final class SamplingState: @unchecked Sendable {
 enum SamplingCadence {
     static func processInterval(logicalCoreCount: Int) -> Double { logicalCoreCount <= 10 ? 8 : 5 }
     static func discoveryEvery(processInterval: Double) -> Int { max(1, Int(25 / processInterval)) }
+    static let warmUpFast = 1.0
+    static let warmUpProcess = 2.0
 }
 
 /// Publication follows visible precision, never raw sensor noise. Explicit/system

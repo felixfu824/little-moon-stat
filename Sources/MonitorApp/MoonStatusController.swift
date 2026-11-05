@@ -9,7 +9,7 @@ private final class AppearanceProbe: NSView {
     var changed: (() -> Void)?
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); changed?() }
 }
-@MainActor @Observable private final class PopoverCost { var value: Double? }
+@MainActor @Observable private final class PopoverCost { var value: Double?; var last: Double? }
 
 /// Store publication and status rendering share one main-actor turn. Appearance,
 /// fonts and pixel images are cached independently from the live numeric model.
@@ -121,16 +121,14 @@ final class MoonStatusController: NSObject, NSPopoverDelegate {
     func togglePopover() {
         if isOpen { popover.performClose(nil); return }
         guard let button=item.button else { return }
-        cost.value=nil; onPopover?(true); rebuildPopover()
+        if let value=cost.value { cost.last=value }; cost.value=nil; onPopover?(true); rebuildPopover()
         popover.show(relativeTo:button.bounds,of:button,preferredEdge:.minY)
         guard isOpen else { popover.contentViewController=nil; onPopover?(false); log("popover opened=false (presentation unavailable)"); return }
         if let window=popover.contentViewController?.view.window {
             window.makeKey()
             if let host=(popover.contentViewController?.view as? NSGlassEffectView)?.contentView { window.makeFirstResponder(host) }
         }
-        baseline=(ProcessInfo.processInfo.systemUptime,Self.cpuTime())
-        costTimer=Timer.scheduledTimer(withTimeInterval:10,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.measureCost() } }
-        costTimer?.tolerance=2
+        startCostMeasurement()
         log("popover opened=\(isOpen) glass=\(options.glass.rawValue)")
     }
     private func rebuildPopover() {
@@ -155,9 +153,26 @@ final class MoonStatusController: NSObject, NSPopoverDelegate {
         func usage(_ who:Int32)->Double { var u=rusage(); guard getrusage(who,&u)==0 else { return 0 }; return Double(u.ru_utime.tv_sec+u.ru_stime.tv_sec)+Double(u.ru_utime.tv_usec+u.ru_stime.tv_usec)/1e6 }
         return usage(RUSAGE_SELF)+usage(RUSAGE_CHILDREN)
     }
+    /// The baseline starts 1 s after open, so the one-time cost of building the popover is
+    /// left out. The first figure follows 3 s later, then one every 10 s while it stays open.
+    private func startCostMeasurement() {
+        baseline=nil
+        costTimer=Timer.scheduledTimer(withTimeInterval:1,repeats:false) { [weak self] _ in MainActor.assumeIsolated {
+            guard let self else { return }
+            self.baseline=(ProcessInfo.processInfo.systemUptime,Self.cpuTime())
+            self.costTimer=Timer.scheduledTimer(withTimeInterval:3,repeats:false) { [weak self] _ in MainActor.assumeIsolated {
+                guard let self else { return }
+                self.measureCost()
+                self.costTimer=Timer.scheduledTimer(withTimeInterval:10,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.measureCost() } }
+                self.costTimer?.tolerance=2
+            } }
+            self.costTimer?.tolerance=0.2
+        } }
+        costTimer?.tolerance=0.2
+    }
     private func measureCost() {
         let now=ProcessInfo.processInfo.systemUptime,cpu=Self.cpuTime()
-        if let baseline,now>baseline.time { cost.value=max(0,(cpu-baseline.cpu)/(now-baseline.time)*100) }
+        if let baseline,now>baseline.time { cost.value=max(0,(cpu-baseline.cpu)/(now-baseline.time)*100); log("popover cost=\(String(format:"%.2f",cost.value ?? 0))") }
         baseline=(now,cpu)
     }
     func checkVisibility(forceHidden:Bool=false, forTour:Bool=false) {
@@ -189,5 +204,5 @@ private struct PopoverRoot: View {
     let store:SnapshotStore, options:DisplayOptions, cost:PopoverCost
     let identity:ObjectIdentifier
     let onMode:(DisplayMode)->Void, onSettings:()->Void, onDismiss:()->Void
-    var body:some View { MoonPopover(snapshot:store.snapshot,options:options,cost:cost.value,onMode:onMode,onSettings:onSettings,actionIdentity:identity).onExitCommand(perform:onDismiss) }
+    var body:some View { MoonPopover(snapshot:store.snapshot,options:options,cost:cost.value,lastCost:cost.last,onMode:onMode,onSettings:onSettings,actionIdentity:identity).onExitCommand(perform:onDismiss) }
 }
