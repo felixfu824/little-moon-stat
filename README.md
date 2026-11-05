@@ -6,7 +6,7 @@
 
 ![Little Moon: moons in the menu bar, the open popover and the desktop panel](docs/readme/hero.png)
 
-Know when your Mac is working hard: CPU and GPU temperature and RAM use at a glance, for under 1% of one CPU core.
+Know when your Mac is working hard: CPU and GPU temperature and RAM use at a glance, for under 1% of one CPU core in the background. While you watch, it updates every second for under 4%.
 
 ![The moon fills and warms from white to red as the temperature rises](docs/readme/moon-ramp.png)
 
@@ -20,7 +20,7 @@ Know when your Mac is working hard: CPU and GPU temperature and RAM use at a gla
 
 Requires macOS 26 Tahoe or later and Apple Silicon.
 
-1. Download `LittleMoon-v0.4.0.dmg` from [Releases](https://github.com/felixfu824/little-moon-stat/releases/latest). It is signed and notarized by Apple.
+1. Download `LittleMoon-v0.4.1.dmg` from [Releases](https://github.com/felixfu824/little-moon-stat/releases/latest). It is signed and notarized by Apple.
 2. Open it and drag **Little Moon** into **Applications**.
 3. Launch it. A short tour shows you around once.
 
