@@ -126,7 +126,7 @@ if sys.argv[3] == 'popover':
     opened = [line for line in app.splitlines() if 'popover opened=' in line]
     if not opened or 'popover opened=true' not in opened[-1]:
         print('UNVERIFIED popover closed during measurement'); sys.exit(3)
-limit = 0.005 if sys.argv[3] == 'menuBar' else (0.015 if sys.argv[3] == 'popover' and sys.argv[5] == 'Apple M3' else (0.009 if sys.argv[3] == 'both' and sys.argv[5] == 'Apple M3' else 0.01))
+limit = 0.005 if sys.argv[3] == 'menuBar' else (0.035 if sys.argv[3] == 'popover' else (0.009 if sys.argv[3] == 'both' and sys.argv[5] == 'Apple M3' else 0.01))
 passed = cpu / wall <= limit if sys.argv[3] in ('menuBar', 'popover', 'both') else cpu / wall < limit
 print(f"{'PASS' if passed else 'FAIL'} whole app mode={sys.argv[3]} budget {limit*100:g}% of one core")
 sys.exit(0 if passed else 1)

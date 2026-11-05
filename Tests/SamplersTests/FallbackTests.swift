@@ -488,3 +488,20 @@ func malformedMappedPayloadFallsBackAndRetainsFault(value: Double) {
     #expect(publicationKey(s, options: DisplayOptions(), menuValues: values, popoverOpen: true)
             != publicationKey({ var t = s; t.unsmoothed?.cpuPercent = 12; return t }(), options: DisplayOptions(), menuValues: values, popoverOpen: true))
 }
+
+@Test func openPopoverScansProcessesEveryTwoSecondsAndMergesNearScans() {
+    #expect(SamplingCadence.processInterval(closed: 5, popoverOpen: true) == 2)
+    #expect(SamplingCadence.processInterval(closed: 8, popoverOpen: true) == 2)
+    #expect(SamplingCadence.processInterval(closed: 8, popoverOpen: false) == 8)
+    var now = 100.0
+    let fake = FakeSet(), queue = DispatchQueue(label: "wp41.process")
+    queue.suspend()
+    let state = SamplingState(samplerSet: fake.set, uptime: { now })
+    defer { state.stop(); queue.resume() }
+    state.start(on: queue, resetSMC: false, details: true, publish: { _ in })
+    let scans = fake.reads["procs", default: 0]
+    now += 0.4; state.timedProcessTick()
+    #expect(fake.reads["procs", default: 0] == scans)
+    now += 2; state.timedProcessTick()
+    #expect(fake.reads["procs", default: 0] == scans + 1)
+}

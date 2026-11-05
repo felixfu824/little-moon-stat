@@ -122,6 +122,10 @@ final class SamplingState: @unchecked Sendable {
     /// When the last fast tick ran. Timer-driven ticks closer than half a second to it are
     /// merged away, so a warm-up and a regular tick never read the same moment twice.
     private var lastFastTickAt: Double?
+    /// The repeating process timer (also in detailTimers) and its closed-popover interval.
+    private var processTimer: DispatchSourceTimer?
+    private var lastProcessTickAt: Double?
+    private var processBaseInterval: Double = 5
     var presentationOptions = DisplayOptions()
     private var menuQuantizer = MenuBarQuantizer()
     private(set) var menuBarValues: MenuBarValues?
@@ -203,9 +207,14 @@ final class SamplingState: @unchecked Sendable {
     func setPopoverOpen(_ open: Bool, on queue: DispatchQueue) {
         guard popoverOpen != open else { return }
         popoverOpen = open
-        guard let fastTimer else { return }
-        let seconds = SamplingCadence.fastInterval(popoverOpen: open)
-        fastTimer.schedule(deadline: .now() + seconds, repeating: seconds, leeway: .milliseconds(Int(seconds * 100)))
+        if let fastTimer {
+            let seconds = SamplingCadence.fastInterval(popoverOpen: open)
+            fastTimer.schedule(deadline: .now() + seconds, repeating: seconds, leeway: .milliseconds(Int(seconds * 100)))
+        }
+        if let processTimer, details {
+            let seconds = SamplingCadence.processInterval(closed: processBaseInterval, popoverOpen: open)
+            processTimer.schedule(deadline: .now() + seconds, repeating: seconds, leeway: .milliseconds(Int(seconds * 100)))
+        }
     }
 
     /// A visibility change only changes the optional detail cadence. Keep the fast
@@ -214,7 +223,7 @@ final class SamplingState: @unchecked Sendable {
         guard publish != nil, details != enabled else { return }
         details = enabled; wasDetailSampling = enabled
         for timer in detailTimers { timer.setEventHandler {}; timer.cancel() }
-        detailTimers.removeAll()
+        detailTimers.removeAll(); processTimer = nil
         if enabled {
             (samplers.cpu as? CPUUsageSampler)?.reset()
             samplers.resetProcesses()
@@ -234,7 +243,7 @@ final class SamplingState: @unchecked Sendable {
     private func startWarmUp(on queue: DispatchQueue) {
         detailTimers += [
             oneShot(on: queue, after: SamplingCadence.warmUpFast) { [weak self] in self?.timedFastTick() },
-            oneShot(on: queue, after: SamplingCadence.warmUpProcess) { [weak self] in self?.processTick() }
+            oneShot(on: queue, after: SamplingCadence.warmUpProcess) { [weak self] in self?.timedProcessTick() }
         ]
     }
     private func oneShot(on queue: DispatchQueue, after seconds: Double, handler: @escaping () -> Void) -> DispatchSourceTimer {
@@ -246,8 +255,12 @@ final class SamplingState: @unchecked Sendable {
     }
 
     private func startDetailTimers(on queue: DispatchQueue, processInterval: Double) {
+        let seconds = SamplingCadence.processInterval(closed: processInterval, popoverOpen: popoverOpen)
+        let process = timer(on: queue, every: seconds) { [weak self] in self?.timedProcessTick() }
+        processTimer = process
+        processBaseInterval = processInterval
         detailTimers = [
-            timer(on: queue, every: processInterval) { [weak self] in self?.processTick() },
+            process,
             timer(on: queue, every: 60) { [weak self] in self?.diskTick() }
         ]
     }
@@ -257,7 +270,7 @@ final class SamplingState: @unchecked Sendable {
         if let timer = fastTimer { timer.setEventHandler {}; timer.cancel() }
         fastTimer = nil
         for timer in detailTimers { timer.setEventHandler {}; timer.cancel() }
-        detailTimers.removeAll()
+        detailTimers.removeAll(); processTimer = nil
         publish = nil
     }
 
@@ -290,7 +303,13 @@ final class SamplingState: @unchecked Sendable {
         if aggregator?.consumeTemperatureReset() == true { (samplers.temperatures as? SMCTemperatureSampler)?.reset() }
         publishIfChanged()
     }
+    /// Process rates are deltas between scans; a scan within 1 s of the last one is merged away.
+    func timedProcessTick() {
+        if let last = lastProcessTickAt, uptime() - last < SamplingCadence.minimumProcessWindow { return }
+        processTick()
+    }
     func processTick() {
+        lastProcessTickAt = uptime()
         let rows = measured("process") { readings.sampleProcessesStatus(limit: .max) }
         measured("aggregate.process") { aggregator?.updateProcesses(rows, at: Date(), freshPIDs: (samplers.processes as? ProcessSampler)?.freshPIDs) }
         if rows.value?.isEmpty == false, let snapshot = aggregator?.snapshot {
@@ -357,9 +376,13 @@ enum SamplingCadence {
     static func processInterval(logicalCoreCount: Int) -> Double { logicalCoreCount <= 10 ? 8 : 5 }
     static func discoveryEvery(processInterval: Double) -> Int { max(1, Int(25 / processInterval)) }
     static func fastInterval(popoverOpen: Bool) -> Double { popoverOpen ? 1 : 2 }
+    /// An open popover is someone watching: the top three refresh every 2 s. The watch budget
+    /// is 3.5 % of one core with children (Mole's own process alone measured 3.5 % on the Air).
+    static func processInterval(closed: Double, popoverOpen: Bool) -> Double { popoverOpen ? min(closed, 2) : closed }
     static let warmUpFast = 1.0
     static let warmUpProcess = 2.0
     static let minimumCPUWindow = 0.5
+    static let minimumProcessWindow = 1.0
 }
 
 /// Publication follows visible precision, never raw sensor noise. Explicit/system
