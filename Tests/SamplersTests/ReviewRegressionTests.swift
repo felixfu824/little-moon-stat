@@ -35,7 +35,7 @@ private func reading(_ entries: [ProcessEntry]) -> ProcessReading {
         let rows = sampler.sampleProcesses(limit: .max)
         aggregator.updateProcesses(rows, at: Date(), freshPIDs: sampler.freshPIDs)
         #expect(aggregator.snapshot.topProcesses.map(\.pid) == [1,2,3])
-        #expect(abs(aggregator.snapshot.topProcesses[2].cpuPercent - (tick == 5 ? 32 : 60)) < 0.0001) // 0.3 × 60 + 0.7 × 20
+        #expect(abs(aggregator.snapshot.topProcesses[2].cpuPercent - (tick == 5 ? 40 : 60)) < 0.0001)
     }
 }
 

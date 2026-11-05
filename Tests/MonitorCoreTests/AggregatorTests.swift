@@ -16,9 +16,14 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.cpuPercent == 20)
     #expect(a.snapshot.gpuPercent == 40)
     fast(&a, 80, 60, TempStat(peak: 100, average: 80, sensorCount: 12))
-    // Percentages blend 70 % new; temperatures keep the even blend.
-    #expect(abs((a.snapshot.cpuPercent ?? 0) - 62) < 1e-9)
-    #expect(abs((a.snapshot.gpuPercent ?? 0) - 54) < 1e-9)
+    #expect(a.snapshot.cpuPercent == 50)
+    #expect(a.snapshot.gpuPercent == 50)
+    // The popover gets the same validated readings without smoothing.
+    #expect(a.snapshot.unsmoothed?.cpuPercent == 80)
+    #expect(a.snapshot.unsmoothed?.gpuPercent == 60)
+    #expect(a.snapshot.unsmoothed?.cpuTemp == TempStat(peak: 100, average: 80, sensorCount: 12))
+    #expect(a.snapshot.forPopover.cpuPercent == 80)
+    #expect(a.snapshot.forPopover.unsmoothed == nil)
     #expect(a.snapshot.cpuTemp == TempStat(peak: 90, average: 70, sensorCount: 12))
     #expect(a.snapshot.gpuTemp == a.snapshot.cpuTemp)
 }
@@ -83,7 +88,8 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     var a = Aggregator(machineName: "Mac", chipName: "M5")
     a.updateProcesses([proc(1, 100)], at: time)
     a.updateProcesses([proc(1, 20)], at: time)
-    #expect(abs((a.snapshot.topProcesses.first?.cpuPercent ?? 0) - 44) < 1e-9)
+    #expect(a.snapshot.topProcesses.first?.cpuPercent == 60)
+    #expect(a.snapshot.unsmoothed?.topProcesses.first?.cpuPercent == 20)
     for _ in 0..<2 { a.updateProcesses(nil, at: time); #expect(a.snapshot.topProcesses.count == 1) }
     a.updateProcesses(nil, at: time)
     #expect(a.snapshot.topProcesses.isEmpty)
@@ -113,7 +119,9 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.topProcesses[0].cpuPercent == 100)
     a.updateProcesses([proc(1, 0), proc(2, 0), proc(3, 0), proc(4, 1000)], at: time)
     #expect(Set(a.snapshot.topProcesses.map(\.pid)) == Set([1, 2, 3]))
-    #expect(abs(a.snapshot.topProcesses[0].cpuPercent - 30) < 1e-9)
+    #expect(a.snapshot.topProcesses[0].cpuPercent == 50)
+    // The popover list ranks by the latest rates alone: the hot newcomer is in at once.
+    #expect(a.snapshot.unsmoothed?.topProcesses.first?.pid == 4)
 }
 
 @Test func aggregatorRestartedProcessSmoothingTakesTheNextScanRaw() {
@@ -126,7 +134,20 @@ private func proc(_ pid: Int32, _ cpu: Double, name: String? = nil, rss: UInt64 
     #expect(a.snapshot.topProcesses.map(\.cpuPercent) == [90, 4])
     // Only one scan is raw; the next one blends again.
     a.updateProcesses([proc(1, 4), proc(2, 0)], at: time)
-    #expect(abs(a.snapshot.topProcesses.first { $0.pid == 2 }!.cpuPercent - 27) < 1e-9)
+    #expect(a.snapshot.topProcesses.first { $0.pid == 2 }!.cpuPercent == 45)
+}
+
+@Test func restartedSmoothingWaitsForEachProcessesOwnFreshRate() {
+    var a = Aggregator(machineName: "Mac", chipName: "M5")
+    a.updateProcesses([proc(1, 100), proc(2, 80)], at: time)
+    a.restartProcessSmoothing()
+    // pid 2 has no fresh rate on this scan: it keeps its figure and stays pending.
+    a.updateProcesses([proc(1, 10), proc(2, 80)], at: time, freshPIDs: [1])
+    #expect(a.snapshot.topProcesses.first { $0.pid == 1 }!.cpuPercent == 10)
+    #expect(a.snapshot.topProcesses.first { $0.pid == 2 }!.cpuPercent == 80)
+    a.updateProcesses([proc(1, 10), proc(2, 6)], at: time, freshPIDs: [1, 2])
+    #expect(a.snapshot.topProcesses.first { $0.pid == 2 }!.cpuPercent == 6)
+    #expect(a.snapshot.topProcesses.first { $0.pid == 1 }!.cpuPercent == 10)
 }
 
 @Test func aggregatorDisplayKeyUsesVisiblePrecisionAndAllVisibleFields() {

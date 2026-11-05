@@ -463,3 +463,28 @@ func malformedMappedPayloadFallsBackAndRetainsFault(value: Double) {
     #expect(fake.reads["cpu", default: 0] == calls + 1)
     _ = latest
 }
+
+@Test func timerTicksCloserThanHalfASecondAreMergedAndPopoverKeyUsesUnsmoothedValues() {
+    var now = 100.0
+    let fake = FakeSet(), queue = DispatchQueue(label: "wp41.merge")
+    queue.suspend()
+    let state = SamplingState(samplerSet: fake.set, uptime: { now })
+    defer { state.stop(); queue.resume() }
+    state.start(on: queue, resetSMC: false, details: true, publish: { _ in })
+    now += 2; state.fastTick()
+    let reads = fake.reads["cpu", default: 0]
+    now += 0.2; state.timedFastTick()
+    #expect(fake.reads["cpu", default: 0] == reads)
+    now += 0.8; state.timedFastTick()
+    #expect(fake.reads["cpu", default: 0] == reads + 1)
+    #expect(SamplingCadence.fastInterval(popoverOpen: true) == 1)
+    #expect(SamplingCadence.fastInterval(popoverOpen: false) == 2)
+    var s = Snapshot.preview
+    s.unsmoothed = Snapshot.Unsmoothed(cpuPercent: 91, gpuPercent: s.gpuPercent, cpuTemp: s.cpuTemp, gpuTemp: s.gpuTemp, topProcesses: s.topProcesses)
+    var q = MenuBarQuantizer()
+    let values = q.update(s)
+    #expect(publicationKey(s, options: DisplayOptions(), menuValues: values, popoverOpen: false)
+            == publicationKey({ var t = s; t.unsmoothed = nil; return t }(), options: DisplayOptions(), menuValues: values, popoverOpen: false))
+    #expect(publicationKey(s, options: DisplayOptions(), menuValues: values, popoverOpen: true)
+            != publicationKey({ var t = s; t.unsmoothed?.cpuPercent = 12; return t }(), options: DisplayOptions(), menuValues: values, popoverOpen: true))
+}

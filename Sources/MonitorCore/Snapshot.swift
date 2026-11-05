@@ -96,6 +96,34 @@ public struct Snapshot: Sendable, Equatable {
     public var thermal: ThermalLevel?
     /// How far each field can be trusted (WP-V). Defaults to all live, so fixtures stay as they were.
     public var status: SnapshotStatus
+    /// The same validated readings without display smoothing, for the popover. nil (fixtures,
+    /// previews) means the popover shows the smoothed fields.
+    public var unsmoothed: Unsmoothed?
+
+    public struct Unsmoothed: Sendable, Equatable {
+        public var cpuPercent: Double?
+        public var gpuPercent: Double?
+        public var cpuTemp: TempStat?
+        public var gpuTemp: TempStat?
+        /// Ranked by the latest rate alone, with no membership hold.
+        public var topProcesses: [ProcRow]
+        public init(cpuPercent: Double? = nil, gpuPercent: Double? = nil, cpuTemp: TempStat? = nil,
+                    gpuTemp: TempStat? = nil, topProcesses: [ProcRow] = []) {
+            self.cpuPercent = cpuPercent; self.gpuPercent = gpuPercent
+            self.cpuTemp = cpuTemp; self.gpuTemp = gpuTemp; self.topProcesses = topProcesses
+        }
+    }
+
+    /// The popover is watched closely, so it shows each new reading as it arrives.
+    /// The desktop panel and the menu-bar moons keep the calmer smoothed fields.
+    public var forPopover: Snapshot {
+        guard let u = unsmoothed else { return self }
+        var s = self
+        s.cpuPercent = u.cpuPercent; s.gpuPercent = u.gpuPercent
+        s.cpuTemp = u.cpuTemp; s.gpuTemp = u.gpuTemp; s.topProcesses = u.topProcesses
+        s.unsmoothed = nil
+        return s
+    }
 
     public init(
         timestamp: Date,

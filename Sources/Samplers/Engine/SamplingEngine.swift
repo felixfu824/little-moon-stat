@@ -42,7 +42,7 @@ public final class SamplingEngine: MonitorEngine {
     }
     public func setPopoverOpen(_ open: Bool) {
         let state=state
-        queue.async { state.popoverOpen=open }
+        queue.async { [queue] in state.setPopoverOpen(open, on: queue) }
     }
     public func setPresentationOptions(_ options: DisplayOptions) {
         guard options != presentationOptions else { return }
@@ -118,7 +118,10 @@ final class SamplingState: @unchecked Sendable {
     private var detailTimers: [DispatchSourceTimer] = []
     private var details = true
     private var wasDetailSampling = false
-    var popoverOpen = false
+    private(set) var popoverOpen = false
+    /// When the last fast tick ran. Timer-driven ticks closer than half a second to it are
+    /// merged away, so a warm-up and a regular tick never read the same moment twice.
+    private var lastFastTickAt: Double?
     var presentationOptions = DisplayOptions()
     private var menuQuantizer = MenuBarQuantizer()
     private(set) var menuBarValues: MenuBarValues?
@@ -188,11 +191,21 @@ final class SamplingState: @unchecked Sendable {
         preparing = false
         if isInitial || resetSMC || longPause { fastTick() }
         else { publishIfChanged() }
-        fastTimer = timer(on: queue, every: 2) { [weak self] in self?.fastTick() }
+        fastTimer = timer(on: queue, every: SamplingCadence.fastInterval(popoverOpen: popoverOpen)) { [weak self] in self?.timedFastTick() }
         if details {
             startDetailTimers(on: queue, processInterval: processInterval)
             if isInitial || enteringDetails || resetSMC || longPause { startWarmUp(on: queue) }
         }
+    }
+
+    /// An open popover reads the fast metrics every second; closed, every two. The next
+    /// tick moves to one new period from now; process and disk cadences do not change.
+    func setPopoverOpen(_ open: Bool, on queue: DispatchQueue) {
+        guard popoverOpen != open else { return }
+        popoverOpen = open
+        guard let fastTimer else { return }
+        let seconds = SamplingCadence.fastInterval(popoverOpen: open)
+        fastTimer.schedule(deadline: .now() + seconds, repeating: seconds, leeway: .milliseconds(Int(seconds * 100)))
     }
 
     /// A visibility change only changes the optional detail cadence. Keep the fast
@@ -220,7 +233,7 @@ final class SamplingState: @unchecked Sendable {
     /// They sit in detailTimers so a pause or a hide cancels them.
     private func startWarmUp(on queue: DispatchQueue) {
         detailTimers += [
-            oneShot(on: queue, after: SamplingCadence.warmUpFast) { [weak self] in self?.fastTick() },
+            oneShot(on: queue, after: SamplingCadence.warmUpFast) { [weak self] in self?.timedFastTick() },
             oneShot(on: queue, after: SamplingCadence.warmUpProcess) { [weak self] in self?.processTick() }
         ]
     }
@@ -256,7 +269,12 @@ final class SamplingState: @unchecked Sendable {
         timer.resume()
         return timer
     }
+    func timedFastTick() {
+        if let last = lastFastTickAt, uptime() - last < SamplingCadence.minimumCPUWindow { return }
+        fastTick()
+    }
     func fastTick() {
+        lastFastTickAt = uptime()
         let freshBaseline = cpuBaselineAt.map { uptime() - $0 < SamplingCadence.minimumCPUWindow } ?? false
         let usage = details && !freshBaseline ? measured("cpu") { readings.sampleCPUStatus() } : nil
         if details && !freshBaseline { cpuBaselineAt = nil }
@@ -275,8 +293,10 @@ final class SamplingState: @unchecked Sendable {
     func processTick() {
         let rows = measured("process") { readings.sampleProcessesStatus(limit: .max) }
         measured("aggregate.process") { aggregator?.updateProcesses(rows, at: Date(), freshPIDs: (samplers.processes as? ProcessSampler)?.freshPIDs) }
-        if rows.value?.isEmpty == false, let selected = aggregator?.snapshot.topProcesses {
+        if rows.value?.isEmpty == false, let snapshot = aggregator?.snapshot {
             var names: [Int32: String] = [:]
+            var selected = snapshot.topProcesses
+            for row in snapshot.unsmoothed?.topProcesses ?? [] where !selected.contains(where: { $0.pid == row.pid }) { selected.append(row) }
             measured("process.names") {
                 for row in selected { names[row.pid] = samplers.injected ? row.name : samplers.processSource.name(for: row.pid) ?? "pid \(row.pid)" }
             }
@@ -304,7 +324,11 @@ final class SamplingState: @unchecked Sendable {
         let key = measured("key") { publicationKey(snapshot,options:presentationOptions,menuValues:values,popoverOpen:popoverOpen) }
         guard key != lastKey else { return }
         lastKey = key
-        if profile { fputs("PUBLISH\n",stderr) }
+        if profile {
+            let shown = popoverOpen ? snapshot.forPopover : snapshot
+            fputs(String(format: "PUBLISH cpu=%.1f top=%@ topcpu=%.1f\n", shown.cpuPercent ?? -1,
+                         shown.topProcesses.first?.name ?? "-", shown.topProcesses.first?.cpuPercent ?? -1), stderr)
+        }
         publish?(snapshot)
     }
 
@@ -332,6 +356,7 @@ final class SamplingState: @unchecked Sendable {
 enum SamplingCadence {
     static func processInterval(logicalCoreCount: Int) -> Double { logicalCoreCount <= 10 ? 8 : 5 }
     static func discoveryEvery(processInterval: Double) -> Int { max(1, Int(25 / processInterval)) }
+    static func fastInterval(popoverOpen: Bool) -> Double { popoverOpen ? 1 : 2 }
     static let warmUpFast = 1.0
     static let warmUpProcess = 2.0
     static let minimumCPUWindow = 0.5
@@ -346,6 +371,9 @@ func publicationKey(_ snapshot: Snapshot, options: DisplayOptions, menuValues: M
             .map { DisplayFormat.temperature($0,unit:.fahrenheit) }.joined(separator:"|")
     }
     if options.displayMode != .desktop { result += menuValues.key(options.menuBarMoons) }
-    if popoverOpen { result += "|popover:" + PopoverPresentation.key(snapshot) }
+    if popoverOpen {
+        let shown = snapshot.forPopover
+        result += "|popover:" + displayKey(shown) + "|" + PopoverPresentation.key(shown)
+    }
     return result
 }

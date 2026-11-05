@@ -204,5 +204,5 @@ private struct PopoverRoot: View {
     let store:SnapshotStore, options:DisplayOptions, cost:PopoverCost
     let identity:ObjectIdentifier
     let onMode:(DisplayMode)->Void, onSettings:()->Void, onDismiss:()->Void
-    var body:some View { MoonPopover(snapshot:store.snapshot,options:options,cost:cost.value,lastCost:cost.last,onMode:onMode,onSettings:onSettings,actionIdentity:identity).onExitCommand(perform:onDismiss) }
+    var body:some View { MoonPopover(snapshot:store.snapshot.forPopover,options:options,cost:cost.value,lastCost:cost.last,onMode:onMode,onSettings:onSettings,actionIdentity:identity).onExitCommand(perform:onDismiss) }
 }

@@ -58,6 +58,9 @@ public struct Aggregator: Sendable {
     }
     private var cpu = Tracked<Double>(), gpu = Tracked<Double>()
     private var cpuTemp = Tracked<TempStat>(), gpuTemp = Tracked<TempStat>()
+    /// Same validation, holds and expiry as the smoothed ones, without EMA (popover only).
+    private var cpuRaw = Tracked<Double>(), gpuRaw = Tracked<Double>()
+    private var cpuTempRaw = Tracked<TempStat>(), gpuTempRaw = Tracked<TempStat>()
     private var memory = Tracked<MemoryStat>(), disk = Tracked<DiskStat>(), thermal = Tracked<ThermalLevel>()
     private var cpuJump = JumpGuard(), gpuJump = JumpGuard()
     private var cpuStuck: StuckDetector, gpuStuck: StuckDetector
@@ -74,7 +77,8 @@ public struct Aggregator: Sendable {
     private var processTick = 0
     private var processMisses = 0
     private var processesEverScanned = false
-    private var processSmoothingRestart = false
+    private var staleSmoothing: Set<Int32> = []
+    private var rawSelected: [ProcRow] = []
     public private(set) var snapshot: Snapshot
 
     public init(machineName: String, chipName: String, identityStatus: MetricStatus = .live,
@@ -104,17 +108,19 @@ public struct Aggregator: Sendable {
     /// Status-aware fast tick. Pass nil for a metric that was not sampled on this tick.
     public mutating func updateFast(cpu: Sample<Double>?, gpu: Sample<Double>?, temperatures: TemperatureSample?,
                                     memory: Sample<MemoryStat>?, thermal: Sample<ThermalLevel>?, at date: Date) {
-        self.cpu.update(cpu.map(Self.checkedPercent), blend: Self.emaFast)
-        self.gpu.update(gpu.map(Self.checkedPercent), blend: Self.emaFast)
+        self.cpu.update(cpu.map(Self.checkedPercent), blend: Self.ema)
+        self.gpu.update(gpu.map(Self.checkedPercent), blend: Self.ema)
+        cpuRaw.update(cpu.map(Self.checkedPercent))
+        gpuRaw.update(gpu.map(Self.checkedPercent))
         let rawCPU = cpu?.value.flatMap { $0.isFinite ? $0 : nil }
         if let temperatures {
-            Self.updateTemperature(&cpuTemp, temperatures.cpu, jump: &cpuJump, stuck: &cpuStuck,
+            Self.updateTemperature(&cpuTemp, raw: &cpuTempRaw, temperatures.cpu, jump: &cpuJump, stuck: &cpuStuck,
                                    cpuPercent: rawCPU, resetRequested: &temperatureResetRequested)
-            Self.updateTemperature(&gpuTemp, temperatures.gpu, jump: &gpuJump, stuck: &gpuStuck,
+            Self.updateTemperature(&gpuTemp, raw: &gpuTempRaw, temperatures.gpu, jump: &gpuJump, stuck: &gpuStuck,
                                    cpuPercent: rawCPU, resetRequested: &temperatureResetRequested)
         } else {
-            cpuTemp.update(nil)
-            gpuTemp.update(nil)
+            cpuTemp.update(nil); cpuTempRaw.update(nil)
+            gpuTemp.update(nil); gpuTempRaw.update(nil)
         }
         self.memory.update(memory.map(Self.checkedMemory))
         self.thermal.update(thermal)
@@ -131,6 +137,13 @@ public struct Aggregator: Sendable {
         snapshot.status.memory = self.memory.status
         snapshot.status.thermal = self.thermal.status
         snapshot.timestamp = date
+        refreshUnsmoothed()
+    }
+
+    private mutating func refreshUnsmoothed() {
+        snapshot.unsmoothed = Snapshot.Unsmoothed(cpuPercent: cpuRaw.value, gpuPercent: gpuRaw.value,
+                                                  cpuTemp: cpuTempRaw.value, gpuTemp: gpuTempRaw.value,
+                                                  topProcesses: rawSelected)
     }
 
     public mutating func updateDisk(_ disk: DiskStat?, at date: Date) {
@@ -159,27 +172,31 @@ public struct Aggregator: Sendable {
         return temperatureResetRequested
     }
 
-    private static func updateTemperature(_ tracked: inout Tracked<TempStat>, _ sample: Sample<TempStat>,
+    private static func updateTemperature(_ tracked: inout Tracked<TempStat>, raw: inout Tracked<TempStat>,
+                                          _ sample: Sample<TempStat>,
                                           jump: inout JumpGuard, stuck: inout StuckDetector, cpuPercent: Double?,
                                           resetRequested: inout Bool) {
-        guard let value = sample.value else { tracked.update(sample, blend: smoothTemp); return }
+        guard let value = sample.value else { tracked.update(sample, blend: smoothTemp); raw.update(sample); return }
         guard value.peak.isFinite, value.average.isFinite else {
-            tracked.miss(.nonFinite, source: sample.source); return
+            tracked.miss(.nonFinite, source: sample.source); raw.miss(.nonFinite, source: sample.source); return
         }
         guard TempStat.validRange.contains(value.peak), TempStat.validRange.contains(value.average) else {
-            tracked.miss(.outOfRange, source: sample.source); return
+            tracked.miss(.outOfRange, source: sample.source); raw.miss(.outOfRange, source: sample.source); return
         }
         switch stuck.observe(peak: value.peak, average: value.average, cpuPercent: cpuPercent) {
         case .becameStuck:
             resetRequested = true
-            tracked.clear(.stuck, source: sample.source); return
+            tracked.clear(.stuck, source: sample.source); raw.clear(.stuck, source: sample.source); return
         case .stillStuck:
-            tracked.clear(.stuck, source: sample.source); return
+            tracked.clear(.stuck, source: sample.source); raw.clear(.stuck, source: sample.source); return
         case .normal:
             break
         }
-        if jump.check(value.peak) == .hold { tracked.miss(.jump, source: sample.source); return }
+        if jump.check(value.peak) == .hold {
+            tracked.miss(.jump, source: sample.source); raw.miss(.jump, source: sample.source); return
+        }
         tracked.update(sample, blend: smoothTemp)
+        raw.update(sample)
     }
 
     private static func checkedPercent(_ sample: Sample<Double>) -> Sample<Double> {
@@ -218,7 +235,7 @@ public struct Aggregator: Sendable {
             // The 2-miss hold protects an existing observation; with no successful scan yet there is nothing to
             // hold, so the real fault shows at once (Astra X5).
             if processMisses > 2 || !processesEverScanned {
-                if processMisses > 2 { selected = []; entered = [:] }
+                if processMisses > 2 { selected = []; entered = [:]; rawSelected = []; refreshUnsmoothed() }
                 snapshot.status.processes = .unavailable(
                     sample.fault ?? (processesEverScanned ? .apiError : .firstSample), source: sample.source)
             }
@@ -226,20 +243,23 @@ public struct Aggregator: Sendable {
         }
         processMisses = 0
         processesEverScanned = true
-        let restartSmoothing = processSmoothingRestart
-        processSmoothingRestart = false
         snapshot.status.processes = sample.quality == .estimated ? .estimated(sample.source, fault: sample.fault)
                                                                  : .live(sample.source)
         var present = Set<Int32>()
+        var latest: [ProcRow] = []
         for var row in rows where row.pid != 0 && row.cpuPercent.isFinite && row.cpuPercent >= 0 {
             guard present.insert(row.pid).inserted else { continue }
+            let fresh = freshPIDs?.contains(row.pid) != false
+            latest.append(row) // A non-fresh row carries the sampler's last measured rate.
             if let prior = processes[row.pid], prior.row.startTime == row.startTime {
-                if freshPIDs?.contains(row.pid) == false { row.cpuPercent = prior.row.cpuPercent }
-                else if !restartSmoothing { row.cpuPercent = Self.emaFast(prior.row.cpuPercent, row.cpuPercent) }
+                if !fresh { row.cpuPercent = prior.row.cpuPercent }
+                else if staleSmoothing.remove(row.pid) == nil { row.cpuPercent = Self.ema(prior.row.cpuPercent, row.cpuPercent) }
             } else { entered[row.pid] = nil }
             processes[row.pid] = ProcessState(row: row, lastSeen: processTick)
         }
         processes = processes.filter { present.contains($0.key) }
+        staleSmoothing.formIntersection(present)
+        rawSelected = Self.topThree(latest)
         // Entry tick plus the following process tick are guaranteed membership.
         let retained = Set(entered.compactMap { pid, tick in
             present.contains(pid) && processTick - tick < 2 ? pid : nil
@@ -263,6 +283,17 @@ public struct Aggregator: Sendable {
         entered = entered.filter { pids.contains($0.key) }
         for row in next where entered[row.pid] == nil { entered[row.pid] = processTick }
         selected = next
+        refreshUnsmoothed()
+    }
+
+    private static func topThree(_ rows: [ProcRow]) -> [ProcRow] {
+        var top: [ProcRow] = []
+        for row in rows {
+            if top.count == 3, let last = top.last, !before(row, last) { continue }
+            top.insert(row, at: top.firstIndex { before(row, $0) } ?? top.count)
+            if top.count > 3 { top.removeLast() }
+        }
+        return top
     }
 
     private mutating func forgetOldProcesses() {
@@ -276,19 +307,20 @@ public struct Aggregator: Sendable {
         for index in selected.indices {
             if let name = names[selected[index].pid] { selected[index].name = name }
         }
+        for index in rawSelected.indices {
+            if let name = names[rawSelected[index].pid] { rawSelected[index].name = name }
+        }
         snapshot.topProcesses = selected
+        refreshUnsmoothed()
     }
     private static func before(_ a: ProcRow, _ b: ProcRow) -> Bool {
         a.cpuPercent == b.cpuPercent ? a.pid < b.pid : a.cpuPercent > b.cpuPercent
     }
     private static func ema(_ old: Double, _ new: Double) -> Double { old * 0.5 + new * 0.5 }
-    /// CPU, GPU and process percentages: 70 % new, so a step shows 90 % within two ticks.
-    /// Temperatures keep the even blend because SMC peaks are noisier.
-    private static func emaFast(_ old: Double, _ new: Double) -> Double { old * 0.3 + new * 0.7 }
 
-    /// After detail sampling was off, held per-process figures are old. The next
-    /// successful scan replaces them instead of blending with them. Membership is unchanged.
-    public mutating func restartProcessSmoothing() { processSmoothingRestart = true }
+    /// After detail sampling was off, held per-process figures are old. Each process's next
+    /// fresh rate replaces its figure instead of blending with it. Membership is unchanged.
+    public mutating func restartProcessSmoothing() { staleSmoothing = Set(processes.keys) }
     private static func smoothTemp(_ old: TempStat, _ new: TempStat) -> TempStat {
         TempStat(peak: ema(old.peak, new.peak), average: ema(old.average, new.average), sensorCount: new.sensorCount)
     }
